@@ -3,7 +3,10 @@ from datetime import datetime
 import os
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import udf, col
-from pyspark.sql.functions import year, month, dayofmonth, hour, weekofyear, date_format
+from pyspark.sql.functions import year, month, dayofmonth, hour, weekofyear, date_format, dayofweek
+from pyspark.sql.functions import monotonically_increasing_id, row_number
+from pyspark.sql.types import IntegerType, TimestampType
+from pyspark.sql.window import Window
 
 
 config = configparser.ConfigParser()
@@ -14,6 +17,8 @@ os.environ['AWS_SECRET_ACCESS_KEY']=config['AWS_SECRET_ACCESS_KEY']
 
 
 def create_spark_session():
+    """Creates Spark Session
+    """
     spark = SparkSession \
         .builder \
         .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:2.7.0") \
@@ -22,6 +27,13 @@ def create_spark_session():
 
 
 def process_song_data(spark, input_data, output_data):
+    """Process song data
+
+    Args:
+        spark (object): Spark Session
+        input_data (string): path to read the input data
+        output_data (string): path to write the output data
+    """
     # get filepath to song data file
     song_data = os.path.join(input_data, 'song_data', '*', '*', '*')
 
@@ -44,6 +56,13 @@ def process_song_data(spark, input_data, output_data):
 
 
 def process_log_data(spark, input_data, output_data):
+    """Process log data
+
+    Args:
+        spark (object): Spark Session
+        input_data (string): path to read the input data
+        output_data (string): path to write the output data
+    """
     # get filepath to log data file
     log_data = os.path.join(input_data, 'log_data', '*', '*')
 
@@ -57,25 +76,25 @@ def process_log_data(spark, input_data, output_data):
     # extract columns for users table
     # keep only last user record for every user_id to capture dimension changes over time
     users_table = df.selectExpr(['user_id', 'firstName as first_name', 'lastName as last_name', 'gender', 'level', 'ts'])
-    users_window = Window.partitionBy('user_id').orderBy(F.desc('ts'))
-    users_table = users_table.withColumn('row_number', F.row_number().over(users_window))
+    users_window = Window.partitionBy('user_id').orderBy(col('ts').desc())
+    users_table = users_table.withColumn('row_number', row_number().over(users_window))
     users_table = users_table.where(users_table.row_number == 1).drop('ts', 'row_number')
 
     # write users table to parquet files
     users_table.write.parquet(os.path.join(output_data, 'users'))
 
     # create timestamp column from original timestamp column
-    get_timestamp = F.udf(lambda ts: datetime.fromtimestamp(ts/1000).isoformat())
+    get_timestamp = udf(lambda ts: datetime.fromtimestamp(ts/1000).isoformat())
     df = df.withColumn('start_time', get_timestamp('ts').cast(TimestampType()))
 
     # extract columns to create time table
     time_table = df.select('start_time')
-    time_table = time_table.withColumn('hour', F.hour('start_time'))
-    time_table = time_table.withColumn('day', F.dayofmonth('start_time'))
-    time_table = time_table.withColumn('week', F.weekofyear('start_time'))
-    time_table = time_table.withColumn('month', F.month('start_time'))
-    time_table = time_table.withColumn('year', F.year('start_time'))
-    time_table = time_table.withColumn('weekday', F.dayofweek('start_time'))
+    time_table = time_table.withColumn('hour', hour('start_time'))
+    time_table = time_table.withColumn('day', dayofmonth('start_time'))
+    time_table = time_table.withColumn('week', weekofyear('start_time'))
+    time_table = time_table.withColumn('month', month('start_time'))
+    time_table = time_table.withColumn('year', year('start_time'))
+    time_table = time_table.withColumn('weekday', dayofweek('start_time'))
 
     # write time table to parquet files partitioned by year and month
     time_table.write.parquet(os.path.join(output_data, 'time'), partitionBy=['year', 'month'])
@@ -85,7 +104,7 @@ def process_log_data(spark, input_data, output_data):
 
     # extract columns from joined song and log datasets to create songplays table
     df = df.orderBy('ts')
-    df = df.withColumn('songplay_id', F.monotonically_increasing_id())
+    df = df.withColumn('songplay_id', monotonically_increasing_id())
     song_df.createOrReplaceTempView('songs')
     df.createOrReplaceTempView('events')
 
@@ -114,6 +133,8 @@ def process_log_data(spark, input_data, output_data):
     songplays_table.write.parquet(os.path.join(output_data, 'songplays'), partitionBy=['year', 'month'])
 
 def main():
+    """Executes ETL
+    """
     spark = create_spark_session()
     input_data = 's3a://udacity-dend/'
     output_data = 's3a://udacity-dend-song-log/'
